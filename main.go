@@ -66,15 +66,15 @@ CREATE INDEX idx_agent_events_event ON agent_events (event);
 
 var (
 	opts = BenchmarkOpts{
-		// Valid values for DBProvider are:
-		// - NewSQLiteDBProvider
-		// - NewDQLite1NodeDBProvider
-		// - NewDQLite3NodeDBProvider
+		// Valid values for provider are:
+		// - NewSQLiteDBProvider()
+		// - NewDQLite1NodeDBProvider()
+		// - NewDQLite3NodeDBProvider()
 		provider: NewSQLiteDBProvider(),
-		// Valid values for DBWrapper are:
-		// - SQLWrapper
-		// - SQLairWrapper
-		// - PreparedSQLairWrapper
+		// Valid values for wrapper are:
+		// - SQLWrapper{}
+		// - SQLairWrapper{}
+		// - PreparedSQLairWrapper{}
 		wrapper: SQLWrapper{},
 		// runInTx indicates if queries will be applied in transactions or not.
 		runInTx: true,
