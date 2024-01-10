@@ -4,7 +4,6 @@
 package main
 
 import (
-	"database/sql"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -22,53 +21,22 @@ import (
 	"gopkg.in/tomb.v2"
 )
 
-// DBProvider can be one of SQLiteDB, DQLite1NodeDB, DQLite3NodeDB
-type DBProvider interface {
-	NewDB(name string) DB
-}
-
-// DB can be SQLDB or SQLairDB
-type DB struct {
-	sqldb    *sql.DB
-	sqlairDB *sqlair.DB
-}
-
-type QueryProvider interface {
-	Init()
-	// GetQuery will assume the db is a sqlairDB or sqlDB depending on which
-	// provider it is.
-	GetQuery(db DB) Query
-}
-
-type PreparedSQLairQueryProvider struct{}
-
-type SQLairQueryProvider struct{}
-
-type SQLQueryProvider struct{}
-
-type ModelProvider interface {
-	Init() error
-	NewModel(string) (Model, error)
-}
-
-type Model struct {
-	DB                  DB
-	Name                string
-	ModelTableName      string
-	ModelEventTableName string
-	TxRunner            TxRunner
-}
-
-type ModelOperationDef struct {
+type DBOperationDef struct {
 	opName string
-	op     ModelOperation
+	op     DBOperation
 	freq   time.Duration
+}
+
+type BenchmarkOpts struct {
+	provider DBProvider
+	wrapper  DBWrapper
+	runInTx  bool
 }
 
 const (
 	// Control the number of models created in the test and the frequency at
 	// which they are added.
-	AddModelRate         = 400
+	AddDBRate            = 400
 	DatabaseAddFrequency = time.Second
 	MaxNumberOfDatabases = 400
 )
@@ -97,8 +65,23 @@ CREATE INDEX idx_agent_events_event ON agent_events (event);
 )
 
 var (
-	modelCreationTime = promauto.NewHistogram(prometheus.HistogramOpts{
-		Name: "model_creation_time",
+	opts = BenchmarkOpts{
+		// Valid values for DBProvider are:
+		// - NewSQLiteDBProvider
+		// - NewDQLite1NodeDBProvider
+		// - NewDQLite3NodeDBProvider
+		provider: NewSQLiteDBProvider(),
+		// Valid values for DBWrapper are:
+		// - SQLWrapper
+		// - SQLairWrapper
+		// - PreparedSQLairWrapper
+		wrapper: SQLWrapper{},
+		// runInTx indicates if queries will be applied in transactions or not.
+		runInTx: true,
+	}
+
+	dbCreationTime = promauto.NewHistogram(prometheus.HistogramOpts{
+		Name: "db_creation_time",
 		Buckets: []float64{
 			0.001,
 			0.01,
@@ -108,68 +91,58 @@ var (
 		},
 	})
 
-	modelTotal = promauto.NewCounter(prometheus.CounterOpts{
-		Name: "model_total",
-		Help: "The total number of models",
+	dbTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "db_total",
+		Help: "The total number of dbs",
 	})
 
-	modelAgentGauge = promauto.NewGaugeVec(prometheus.GaugeOpts{
-		Name: "model_agents",
-	}, []string{"model"})
+	dbAgentGauge = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "db_agents",
+	}, []string{"db"})
 
-	modelAgentEventsGauge = promauto.NewGaugeVec(prometheus.GaugeOpts{
-		Name: "model_agent_events",
-	}, []string{"model"})
+	dbAgentEventsGauge = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "db_agent_events",
+	}, []string{"db"})
 
-	// Valid values for queryProvider are:
-	// - SQLQueryProvider
-	// - SQLairQueryProvider
-	// - PreparedSQLairQueryProvider
-	queryProvider = SQLQueryProvider
-
-	// Valid values for database are:
-	// - SQLiteDB
-	// - DQLite1NodeDB
-	// - DQLite3NodeDB
-	database = SQLiteDB
-
-	// Set the operations to be performed per model and the frequency.
-	perModelOperations = []ModelOperationDef{
+	// Set the operations to be performed per db and the frequency.
+	perDBOperations = []DBOperationDef{
 		{
-			opName: "model-init",
+			opName: "db-init",
 			op:     seedModelAgents(60),
 			freq:   time.Duration(0),
 		},
-		{
-			opName: "agent-status-active",
-			op:     updateModelAgentStatus(10, "active"),
-			freq:   time.Second * 5,
-		},
-		{
-			opName: "agent-status-inactive",
-			op:     updateModelAgentStatus(10, "inactive"),
-			freq:   time.Second * 8,
-		},
-		{
-			opName: "agent-events",
-			op:     generateAgentEvents(10),
-			freq:   time.Second * 15,
-		},
-		{
-			opName: "cull-agent-events",
-			op:     cullAgentEvents(30),
-			freq:   time.Second * 30,
-		},
-		{
-			opName: "agents-count",
-			op:     agentModelCount(modelAgentGauge),
-			freq:   time.Second * 30,
-		},
-		{
-			opName: "agent-events-count",
-			op:     agentEventModelCount(modelAgentEventsGauge),
-			freq:   time.Second * 30,
-		},
+		/*
+			{
+				opName: "agent-status-active",
+				op:     updateDBAgentStatus(10, "active"),
+				freq:   time.Second * 5,
+			},
+			{
+				opName: "agent-status-inactive",
+				op:     updateDBAgentStatus(10, "inactive"),
+				freq:   time.Second * 8,
+			},
+			{
+				opName: "agent-events",
+				op:     generateAgentEvents(10),
+				freq:   time.Second * 15,
+			},
+			{
+				opName: "cull-agent-events",
+				op:     cullAgentEvents(30),
+				freq:   time.Second * 30,
+			},
+			{
+				opName: "agents-count",
+				op:     agentDBCount(dbAgentGauge),
+				freq:   time.Second * 30,
+			},
+			{
+				opName: "agent-events-count",
+				op:     agentEventDBCount(dbAgentEventsGauge),
+				freq:   time.Second * 30,
+			},
+		*/
 	}
 )
 
@@ -180,13 +153,6 @@ func main() {
 	}
 	if err != nil {
 		fmt.Printf("establishing tmp dir: %v\n", err)
-		os.Exit(1)
-	}
-
-	provider := newModelProvider()
-
-	if err := provider.Init(); err != nil {
-		fmt.Printf("init model provider: %v\n", err)
 		os.Exit(1)
 	}
 
@@ -208,8 +174,8 @@ func main() {
 		return server.ListenAndServe()
 	})
 
-	modelCh := modelRamper(&t, provider, DatabaseAddFrequency, AddModelRate, MaxNumberOfDatabases)
-	modelSpawner(&t, modelCh, perModelOperations)
+	dbCh := dbRamper(&t, opts, DatabaseAddFrequency, AddDBRate, MaxNumberOfDatabases)
+	dbSpawner(&t, dbCh, perDBOperations)
 
 	sig := make(chan os.Signal)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
@@ -225,32 +191,32 @@ func main() {
 	fmt.Println(err)
 }
 
-func modelSpawner(
+func dbSpawner(
 	t *tomb.Tomb,
-	ch <-chan Model,
-	perModelOperations []ModelOperationDef,
+	ch <-chan DB,
+	perDBOperations []DBOperationDef,
 ) {
-	startPerModelOperations := func(opTomb *tomb.Tomb, models []Model) {
-		for _, model := range models {
-			for _, op := range perModelOperations {
-				RunModelOperation(opTomb, op.opName, op.freq, op.op, model)
+	startPerDBOperations := func(opTomb *tomb.Tomb, dbs []DB) {
+		for _, db := range dbs {
+			for _, op := range perDBOperations {
+				RunDBOperation(opTomb, op.opName, op.freq, op.op, db)
 			}
 		}
 	}
 
 	t.Go(func() error {
 		opTomb := tomb.Tomb{}
-		allModels := []Model{}
-		models := []Model{}
+		allDBs := []DB{}
+		dbs := []DB{}
 
 		for {
 			select {
-			case model, ok := <-ch:
+			case db, ok := <-ch:
 				if !ok {
 					ch = nil
 					break
 				}
-				models = append(models, model)
+				dbs = append(dbs, db)
 			case <-t.Dying():
 				opTomb.Kill(nil)
 				return opTomb.Wait()
@@ -259,11 +225,11 @@ func modelSpawner(
 				fmt.Printf("operation tomb is dead: %v", err)
 				return err
 			default:
-				if len(models) == 0 {
+				if len(dbs) == 0 {
 					break
 				}
-				allModels = append(allModels, models...)
-				models = []Model{}
+				allDBs = append(allDBs, dbs...)
+				dbs = []DB{}
 				opTomb.Kill(nil)
 				if opTomb.Alive() {
 					if err := opTomb.Wait(); err != nil {
@@ -272,21 +238,23 @@ func modelSpawner(
 					}
 				}
 				opTomb = tomb.Tomb{}
-				fmt.Printf("Spawning model %d operations\n", AddModelRate)
-				startPerModelOperations(&opTomb, allModels)
+				fmt.Printf("Spawning model %d operations\n", AddDBRate)
+				// Should this not just be dbs, not allDBs? Every time we loop
+				// through and add a few DBs we startPerDBOps on all the dbs.
+				startPerDBOperations(&opTomb, allDBs)
 			}
 		}
 	})
 }
 
-func modelRamper(
+func dbRamper(
 	t *tomb.Tomb,
-	provider ModelProvider,
+	opts BenchmarkOpts,
 	freq time.Duration,
 	inc,
 	max int,
-) <-chan Model {
-	newDBCh := make(chan Model, inc)
+) <-chan DB {
+	newDBCh := make(chan DB, inc)
 	t.Go(func() error {
 		defer close(newDBCh)
 		ticker := time.NewTicker(freq)
@@ -297,9 +265,9 @@ func modelRamper(
 				return nil
 			case <-ticker.C:
 			}
-			dbs, makeErr := makeModels(provider, inc)
+			dbs, makeErr := makeDBs(opts, inc)
 			numDBS += len(dbs)
-			modelTotal.Add(float64(len(dbs)))
+			dbTotal.Add(float64(len(dbs)))
 
 			for _, db := range dbs {
 				newDBCh <- db
@@ -314,21 +282,22 @@ func modelRamper(
 	return newDBCh
 }
 
-func makeModels(provider ModelProvider, x int) ([]Model, error) {
-	models := make([]Model, 0, x)
+func makeDBs(opts BenchmarkOpts, x int) ([]DB, error) {
+	dbs := make([]DB, 0, x)
 	for i := 0; i < x; i++ {
-		model, err := func() (Model, error) {
-			timer := prometheus.NewTimer(modelCreationTime)
+		db, err := func() (DB, error) {
+			timer := prometheus.NewTimer(dbCreationTime)
 			defer timer.ObserveDuration()
 			dbUUID := uuid.New()
-			return provider.NewModel(dbUUID.String())
+			sqldb, err := opts.provider.NewDB(dbUUID.String())
+			return opts.wrapper.Wrap(sqldb, dbUUID.String(), opts.runInTx), err
 		}()
 
 		if err != nil {
-			return models, err
+			return dbs, err
 		}
-		models = append(models, model)
+		dbs = append(dbs, db)
 	}
 
-	return models, nil
+	return dbs, nil
 }
