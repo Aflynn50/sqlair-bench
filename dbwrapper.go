@@ -1,6 +1,9 @@
 package main
 
-import "database/sql"
+import (
+	"database/sql"
+	"github.com/canonical/sqlair"
+)
 
 type DBWrapper interface {
 	Wrap(db *sql.DB, name string, runInTX bool) DB
@@ -20,18 +23,16 @@ func (SQLWrapper) Wrap(db *sql.DB, name string, runInTX bool) DB {
 	}
 }
 
-/*
 type SQLairWrapper struct{}
 
-func (SQLairWrapper) Wrap(db sql.DB, name string, runInTx bool) DB {
+func (SQLairWrapper) Wrap(db *sql.DB, name string, runInTx bool) DB {
 	runner := SQLairPlainRunner
 	if runInTx {
 		runner = SQLairTxRunner
 	}
 	return &SQLairDB{
-		DB:     sqlair.New(db),
-		Name:   name,
-		Runner: runner,
+		db:     sqlair.NewDB(db),
+		name:   name,
+		runner: runner,
 	}
 }
-*/

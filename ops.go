@@ -33,164 +33,69 @@ func seedModelAgents(numAgents int) DBOperation {
 	}
 }
 
-/*
-	func updateModelAgentStatus(agentUpdates int, status string) ModelOperation {
-		return func(model Model, tx *sql.Tx) error {
-			fmt.Println("Updating agent status")
+func updateModelAgentStatus(agentUpdates int, status string) DBOperation {
+	return func(db DB) error {
+		fmt.Println("Updating agent status")
+		return db.UpdateModelAgentStatus(agentUpdates, status)
+	}
+}
 
-			rows, err := tx.Query(`
+func generateAgentEvents(agents int) DBOperation {
+	return func(db DB) error {
+		fmt.Println("Generating agent events")
+		return db.GenerateAgentEvents(agents)
+	}
+}
 
-SELECT uuid
-FROM agent
-WHERE model_name = ?
-ORDER BY RANDOM()
-LIMIT ?
-`,
+func cullAgentEvents(maxEvents int) DBOperation {
+	return func(db DB) error {
+		fmt.Println("Culling agent events")
+		return db.CullAgentEvents(maxEvents)
+	}
+}
 
-				model.Name, agentUpdates)
+func agentModelCount(gaugeVec *prometheus.GaugeVec) DBOperation {
+	return func(db DB) error {
+		fmt.Println("Agent model count")
 
-			if err != nil {
-				return err
-			}
-
-			agentUUIDS := make([]any, 0, agentUpdates)
-
-			for rows.Next() {
-				var agentUUID string
-				if err := rows.Scan(&agentUUID); err != nil {
-					return err
-				}
-				agentUUIDS = append(agentUUIDS, agentUUID)
-			}
-
-			_, err = tx.Exec("UPDATE agent SET status = '"+status+"' WHERE uuid IN ("+SliceToPlaceholder(agentUUIDS)+")",
-				agentUUIDS...)
+		count, err := db.AgentModelCount()
+		if err != nil || count == 0 {
 			return err
 		}
-	}
 
-	func generateAgentEvents(agents int) ModelOperation {
-		return func(model Model, tx *sql.Tx) error {
-			fmt.Println("Generating agent events")
-
-			rows, err := tx.Query(`
-
-SELECT uuid
-FROM agent
-WHERE model_name = ?
-ORDER BY RANDOM()
-LIMIT ?
-`,
-
-				model.Name, agents)
-
-			if err != nil {
-				return err
-			}
-
-			agentUUIDS := make([]any, 0, agents*2)
-			insertStrings := make([]string, 0, agents)
-
-			for rows.Next() {
-				var agentUUID string
-				if err := rows.Scan(&agentUUID); err != nil {
-					return err
-				}
-				agentUUIDS = append(agentUUIDS, agentUUID, "event")
-				insertStrings = append(insertStrings, "(?, ?)")
-			}
-
-			_, err = tx.Exec("INSERT INTO agent_events VALUES "+strings.Join(insertStrings, ","),
-				agentUUIDS...)
+		gauge, err := gaugeVec.GetMetricWith(prometheus.Labels{
+			"db": db.Name(),
+		})
+		if err != nil {
 			return err
 		}
+
+		gauge.Set(float64(count))
+		return nil
 	}
+}
 
-	func cullAgentEvents(maxEvents int) ModelOperation {
-		return func(model Model, tx *sql.Tx) error {
-			fmt.Println("Culling agent events")
+func agentEventModelCount(gaugeVec *prometheus.GaugeVec) DBOperation {
+	return func(db DB) error {
+		fmt.Println("Agent event model count")
 
-			// delete from agent_events where agent_uuid in (select agent_uuid from agent_events group by agent_uuid having count(*) > 1
-			_, err := tx.Exec("DELETE FROM agent_events WHERE agent_uuid IN (SELECT agent_uuid from agent_events INNER JOIN agent ON agent.uuid = agent_events.agent_uuid WHERE agent.model_name = ? GROUP BY agent_uuid HAVING COUNT(*) > ?)",
-				model.Name, maxEvents)
+		count, err := db.AgentEventModelCount()
+		if err != nil || count == 0 {
 			return err
 		}
-	}
 
-	func agentModelCount(gaugeVec *prometheus.GaugeVec) ModelOperation {
-		return func(model Model, tx *sql.Tx) error {
-			fmt.Println("Agent model count")
-
-			rows, err := tx.Query(`
-
-SELECT count(*)
-FROM agent
-WHERE model_name = ?
-`, model.Name)
-
-			if err != nil {
-				return err
-			}
-
-			if !rows.Next() {
-				return nil
-			}
-
-			var count int
-			err = rows.Scan(&count)
-			if err != nil {
-				return err
-			}
-
-			gauge, err := gaugeVec.GetMetricWith(prometheus.Labels{
-				"model": model.Name,
-			})
-			if err != nil {
-				return err
-			}
-
-			gauge.Set(float64(count))
-			return nil
+		gauge, err := gaugeVec.GetMetricWith(prometheus.Labels{
+			"db": db.Name(),
+		})
+		if err != nil {
+			return err
 		}
+
+		gauge.Set(float64(count))
+		return nil
 	}
+}
 
-	func agentEventModelCount(gaugeVec *prometheus.GaugeVec) ModelOperation {
-		return func(model Model, tx *sql.Tx) error {
-			fmt.Println("Agent event model count")
-
-			rows, err := tx.Query(`
-			SELECT count(*)
-			FROM agent_events
-			INNER JOIN agent ON agent.uuid = agent_events.agent_uuid
-			WHERE agent.model_name = ?
-			`, model.Name)
-
-			if err != nil {
-				return err
-			}
-
-			if !rows.Next() {
-				return nil
-			}
-
-			var count int
-			err = rows.Scan(&count)
-			if err != nil {
-				return err
-			}
-
-			gauge, err := gaugeVec.GetMetricWith(prometheus.Labels{
-				"model": model.Name,
-			})
-			if err != nil {
-				return err
-			}
-
-			gauge.Set(float64(count))
-			return nil
-		}
-	}
-*/
 var (
 	timeBucketSplits = []float64{
 		0.001,
@@ -245,6 +150,7 @@ func RunDBOperation(
 
 		if freq == time.Duration(0) {
 			if err := runDBOp(op, db, opHistogram); err != nil {
+				panic(err)
 				opErrCount.Inc()
 				fmt.Printf("operation %s died for db %s: %v\n", opName, db.Name(), err)
 			}

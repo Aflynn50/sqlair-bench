@@ -75,7 +75,7 @@ var (
 		// - SQLWrapper{}
 		// - SQLairWrapper{}
 		// - PreparedSQLairWrapper{}
-		wrapper: SQLWrapper{},
+		wrapper: SQLairWrapper{},
 		// runInTx indicates if queries will be applied in transactions or not.
 		runInTx: true,
 	}
@@ -111,38 +111,36 @@ var (
 			op:     seedModelAgents(60),
 			freq:   time.Duration(0),
 		},
-		/*
-			{
-				opName: "agent-status-active",
-				op:     updateDBAgentStatus(10, "active"),
-				freq:   time.Second * 5,
-			},
-			{
-				opName: "agent-status-inactive",
-				op:     updateDBAgentStatus(10, "inactive"),
-				freq:   time.Second * 8,
-			},
-			{
-				opName: "agent-events",
-				op:     generateAgentEvents(10),
-				freq:   time.Second * 15,
-			},
-			{
-				opName: "cull-agent-events",
-				op:     cullAgentEvents(30),
-				freq:   time.Second * 30,
-			},
-			{
-				opName: "agents-count",
-				op:     agentDBCount(dbAgentGauge),
-				freq:   time.Second * 30,
-			},
-			{
-				opName: "agent-events-count",
-				op:     agentEventDBCount(dbAgentEventsGauge),
-				freq:   time.Second * 30,
-			},
-		*/
+		{
+			opName: "agent-status-active",
+			op:     updateModelAgentStatus(10, "active"),
+			freq:   time.Second * 5,
+		},
+		{
+			opName: "agent-status-inactive",
+			op:     updateModelAgentStatus(10, "inactive"),
+			freq:   time.Second * 8,
+		},
+		{
+			opName: "agent-events",
+			op:     generateAgentEvents(10),
+			freq:   time.Second * 15,
+		},
+		{
+			opName: "cull-agent-events",
+			op:     cullAgentEvents(30),
+			freq:   time.Second * 30,
+		},
+		{
+			opName: "agents-count",
+			op:     agentModelCount(dbAgentGauge),
+			freq:   time.Second * 30,
+		},
+		{
+			opName: "agent-events-count",
+			op:     agentEventModelCount(dbAgentEventsGauge),
+			freq:   time.Second * 30,
+		},
 	}
 )
 
