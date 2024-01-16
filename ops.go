@@ -87,6 +87,7 @@ func agentEventModelCount(gaugeVec *prometheus.GaugeVec) DBOperation {
 		gauge, err := gaugeVec.GetMetricWith(prometheus.Labels{
 			"db": db.Name(),
 		})
+
 		if err != nil {
 			return err
 		}
