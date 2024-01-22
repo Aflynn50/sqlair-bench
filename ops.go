@@ -10,7 +10,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promauto"
 	"gopkg.in/tomb.v2"
 )
 
@@ -99,19 +98,19 @@ func agentEventModelCount(gaugeVec *prometheus.GaugeVec) DBOperation {
 
 var (
 	timeBucketSplits = []float64{
+		0.0001,
+		0.0002,
+		0.0003,
+		0.0004,
+		0.0005,
+		0.0006,
+		0.0007,
+		0.0008,
+		0.0009,
 		0.001,
 		0.01,
-		0.02,
-		0.03,
-		0.04,
-		0.05,
-		0.06,
-		0.07,
-		0.08,
-		0.09,
 		0.1,
 		1.0,
-		10.0,
 	}
 )
 
@@ -129,25 +128,12 @@ func RunDBOperation(
 	t *tomb.Tomb,
 	opName string,
 	freq time.Duration,
+	opHistogram prometheus.Histogram,
+	opErrCount prometheus.Counter,
 	op DBOperation,
 	db DB,
 ) {
 	t.Go(func() error {
-		opHistogram := promauto.NewHistogram(prometheus.HistogramOpts{
-			Name: "db_operation_time",
-			ConstLabels: prometheus.Labels{
-				"db":        db.Name(),
-				"operation": opName,
-			},
-			Buckets: timeBucketSplits,
-		})
-		opErrCount := promauto.NewCounter(prometheus.CounterOpts{
-			Name: "db_operation_errors",
-			ConstLabels: prometheus.Labels{
-				"db":        db.Name(),
-				"operation": opName,
-			},
-		})
 
 		if freq == time.Duration(0) {
 			if err := runDBOp(op, db, opHistogram); err != nil {

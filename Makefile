@@ -3,4 +3,6 @@ build:
 	docker compose build
 
 run: build
-	docker compose up
+	-docker compose down
+	docker compose up 
+

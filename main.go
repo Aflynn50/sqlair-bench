@@ -65,22 +65,6 @@ CREATE INDEX idx_agent_events_event ON agent_events (event);
 )
 
 var (
-	opts = BenchmarkOpts{
-		// Valid values for provider are:
-		// - NewSQLiteDBProvider()
-		// - NewDQLite1NodeDBProvider()
-		// - NewDQLite3NodeDBProvider()
-		// provider: NewDQLite3NodeDBProvider(),
-		provider: NewSQLiteDBProvider(),
-		// Valid values for wrapper are:
-		// - SQLWrapper{}
-		// - SQLairWrapper{}
-		// - PreparedSQLairWrapper{}
-		wrapper: SQLWrapper{},
-		// runInTx indicates if queries will be applied in transactions or not.
-		runInTx: true,
-	}
-
 	dbCreationTime = promauto.NewHistogram(prometheus.HistogramOpts{
 		Name: "db_creation_time",
 		Buckets: []float64{
@@ -145,60 +129,36 @@ var (
 	}
 )
 
-func main() {
-	var err error
-	if _, err = os.Stat("/tmp"); errors.Is(err, fs.ErrNotExist) {
-		err = os.Mkdir("/tmp", 0750)
-	}
-	if err != nil {
-		fmt.Printf("establishing tmp dir: %v\n", err)
-		os.Exit(1)
-	}
-
-	t := tomb.Tomb{}
-
-	mux := http.NewServeMux()
-	server := http.Server{
-		Addr:         ":3333",
-		Handler:      mux,
-		WriteTimeout: 50 * time.Second,
-	}
-	mux.Handle("/metrics", promhttp.Handler())
-	mux.Handle("/debug/pprof/cmdline", http.HandlerFunc(pprof.Cmdline))
-	mux.Handle("/debug/pprof/profile", http.HandlerFunc(pprof.Profile))
-	mux.Handle("/debug/pprof/symbol", http.HandlerFunc(pprof.Symbol))
-	mux.Handle("/debug/pprof/trace", http.HandlerFunc(pprof.Trace))
-
-	t.Go(func() error {
-		return server.ListenAndServe()
-	})
-
+func start(t tomb.Tomb, opts *BenchmarkOpts) {
 	dbCh := dbRamper(&t, opts, DatabaseAddFrequency, AddDBRate, MaxNumberOfDatabases)
-	dbSpawner(&t, dbCh, perDBOperations)
-
-	sig := make(chan os.Signal)
-	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
-
-	select {
-	case <-t.Dead():
-	case <-sig:
-		t.Kill(nil)
-		server.Close()
-	}
-
-	err = t.Wait()
-	fmt.Println(err)
+	dbSpawner(&t, opts, dbCh, perDBOperations)
 }
 
 func dbSpawner(
 	t *tomb.Tomb,
+	opts *BenchmarkOpts,
 	ch <-chan DB,
 	perDBOperations []DBOperationDef,
 ) {
 	startPerDBOperations := func(opTomb *tomb.Tomb, dbs []DB) {
-		for _, db := range dbs {
-			for _, op := range perDBOperations {
-				RunDBOperation(opTomb, op.opName, op.freq, op.op, db)
+		for _, op := range perDBOperations {
+			opHistogram := promauto.NewHistogram(prometheus.HistogramOpts{
+				Name: "db_operation_time",
+				ConstLabels: prometheus.Labels{
+					"wrapper":   opts.wrapper.Name(),
+					"operation": op.opName,
+				},
+				Buckets: timeBucketSplits,
+			})
+			opErrCount := promauto.NewCounter(prometheus.CounterOpts{
+				Name: "db_operation_errors",
+				ConstLabels: prometheus.Labels{
+					"wrapper":   opts.wrapper.Name(),
+					"operation": op.opName,
+				},
+			})
+			for _, db := range dbs {
+				RunDBOperation(opTomb, op.opName, op.freq, opHistogram, opErrCount, op.op, db)
 			}
 		}
 	}
@@ -238,17 +198,16 @@ func dbSpawner(
 				}
 				opTomb = tomb.Tomb{}
 				fmt.Printf("Spawning model %d operations\n", AddDBRate)
-				// Should this not just be dbs, not allDBs? Every time we loop
-				// through and add a few DBs we startPerDBOps on all the dbs.
 				startPerDBOperations(&opTomb, allDBs)
 			}
 		}
 	})
 }
 
+// creates DBs. DBs are sent down the channel once they are ready.
 func dbRamper(
 	t *tomb.Tomb,
-	opts BenchmarkOpts,
+	opts *BenchmarkOpts,
 	freq time.Duration,
 	inc,
 	max int,
@@ -281,7 +240,7 @@ func dbRamper(
 	return newDBCh
 }
 
-func makeDBs(opts BenchmarkOpts, x int) ([]DB, error) {
+func makeDBs(opts *BenchmarkOpts, x int) ([]DB, error) {
 	dbs := make([]DB, 0, x)
 	for i := 0; i < x; i++ {
 		db, err := func() (DB, error) {
@@ -299,4 +258,81 @@ func makeDBs(opts BenchmarkOpts, x int) ([]DB, error) {
 	}
 
 	return dbs, nil
+}
+
+func main() {
+	opts1 := BenchmarkOpts{
+		// Valid values for provider are:
+		// - NewSQLiteDBProvider()
+		// - NewDQLite1NodeDBProvider()
+		// - NewDQLite3NodeDBProvider()
+		// provider: NewDQLite3NodeDBProvider(),
+		provider: NewSQLiteDBProvider(),
+		// Valid values for wrapper are:
+		// - SQLWrapper{}
+		// - SQLairWrapper{}
+		// - PreparedSQLairWrapper{}
+		wrapper: SQLWrapper{},
+		// runInTx indicates if queries will be applied in transactions or not.
+		runInTx: true,
+	}
+	opts2 := BenchmarkOpts{
+		// Valid values for provider are:
+		// - NewSQLiteDBProvider()
+		// - NewDQLite1NodeDBProvider()
+		// - NewDQLite3NodeDBProvider()
+		// provider: NewDQLite3NodeDBProvider(),
+		provider: NewSQLiteDBProvider(),
+		// Valid values for wrapper are:
+		// - SQLWrapper{}
+		// - SQLairWrapper{}
+		// - PreparedSQLairWrapper{}
+		wrapper: SQLairWrapper{},
+		// runInTx indicates if queries will be applied in transactions or not.
+		runInTx: true,
+	}
+
+	var err error
+	if _, err = os.Stat("/tmp"); errors.Is(err, fs.ErrNotExist) {
+		err = os.Mkdir("/tmp", 0750)
+	}
+	if err != nil {
+		fmt.Printf("establishing tmp dir: %v\n", err)
+		os.Exit(1)
+	}
+
+	mux := http.NewServeMux()
+	server := http.Server{
+		Addr:         ":3333",
+		Handler:      mux,
+		WriteTimeout: 50 * time.Second,
+	}
+	mux.Handle("/metrics", promhttp.Handler())
+	mux.Handle("/debug/pprof/cmdline", http.HandlerFunc(pprof.Cmdline))
+	mux.Handle("/debug/pprof/profile", http.HandlerFunc(pprof.Profile))
+	mux.Handle("/debug/pprof/symbol", http.HandlerFunc(pprof.Symbol))
+	mux.Handle("/debug/pprof/trace", http.HandlerFunc(pprof.Trace))
+
+	t := tomb.Tomb{}
+
+	t.Go(func() error {
+		return server.ListenAndServe()
+	})
+
+	go start(t, &opts1)
+
+	go start(t, &opts2)
+
+	sig := make(chan os.Signal)
+	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
+
+	select {
+	case <-t.Dead():
+	case <-sig:
+		t.Kill(nil)
+		server.Close()
+	}
+
+	err = t.Wait()
+	fmt.Println(err)
 }
