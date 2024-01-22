@@ -151,7 +151,6 @@ func RunDBOperation(
 
 		if freq == time.Duration(0) {
 			if err := runDBOp(op, db, opHistogram); err != nil {
-				panic(err)
 				opErrCount.Inc()
 				fmt.Printf("operation %s died for db %s: %v\n", opName, db.Name(), err)
 			}

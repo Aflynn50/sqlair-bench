@@ -70,12 +70,13 @@ var (
 		// - NewSQLiteDBProvider()
 		// - NewDQLite1NodeDBProvider()
 		// - NewDQLite3NodeDBProvider()
+		// provider: NewDQLite3NodeDBProvider(),
 		provider: NewSQLiteDBProvider(),
 		// Valid values for wrapper are:
 		// - SQLWrapper{}
 		// - SQLairWrapper{}
 		// - PreparedSQLairWrapper{}
-		wrapper: SQLairWrapper{},
+		wrapper: SQLWrapper{},
 		// runInTx indicates if queries will be applied in transactions or not.
 		runInTx: true,
 	}
