@@ -2,8 +2,6 @@ FROM ubuntu:22.04
 
 EXPOSE 3333
 
-COPY ./sqlair-bench /sqlair-bench
-
 RUN apt-get update && apt-get install -y --no-install-recommends \
   && apt-get install -y libdqlite-dev 
 
@@ -12,5 +10,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # single threaded mode. This does apparently incur performance penalties for
 # DQLite.
 ENV GO_DQLITE_MULTITHREAD=1
+
+COPY ./sqlair-bench /sqlair-bench
 
 ENTRYPOINT ["/sqlair-bench"]
